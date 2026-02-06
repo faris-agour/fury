@@ -1183,10 +1183,13 @@ def _create_streamtube_baked(
     for idx, line in enumerate(lines_arr):
         line_data[idx, : line.shape[0]] = line
 
-    if colors is None:
-        colors = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    use_rgb_mode = isinstance(colors, str) and colors.lower() == "rgb"
 
-    colors = np.asarray(colors, dtype=np.float32)
+    if use_rgb_mode:
+        line_colors = np.zeros((n_lines, 3), dtype=np.float32)
+    else:
+        if colors is None:
+            colors = np.array([1.0, 1.0, 1.0], dtype=np.float32)
 
         colors = np.asarray(colors, dtype=np.float32)
 
@@ -1259,6 +1262,13 @@ def _create_streamtube_baked(
     colors_data = np.zeros((total_vertices, color_components), dtype=np.float32)
     indices_data = np.zeros((total_triangles, 3), dtype=np.uint32)
 
+    if not use_rgb_mode:
+        vertex_idx = 0
+        for line_idx in range(n_lines):
+            n_verts = int(vertices_per_line[line_idx])
+            colors_data[vertex_idx : vertex_idx + n_verts] = line_colors[line_idx]
+            vertex_idx += n_verts
+
     geometry = buffer_to_geometry(
         positions=positions_data,
         normals=normals_data,
@@ -1290,6 +1300,7 @@ def _create_streamtube_baked(
     mesh_obj.lines = lines_arr
     mesh_obj.line_colors = line_colors
     mesh_obj.color_components = color_components
+    mesh_obj.use_rgb_mode = use_rgb_mode
     mesh_obj._needs_gpu_update = True
     mesh_obj.line_buffer = Buffer(line_data.reshape(-1))
     mesh_obj.length_buffer = Buffer(line_lengths)
@@ -1378,6 +1389,9 @@ def streamtube(
 
     if backend not in ("cpu", "gpu"):
         raise ValueError(f"backend must be 'cpu' or 'gpu', got {backend!r}")
+
+    if isinstance(colors, str) and colors.lower() == "rgb" and backend != "gpu":
+        raise ValueError("colors='rgb' requires backend='gpu'")
 
     if backend == "gpu":
         return _create_streamtube_baked(
