@@ -1184,10 +1184,44 @@ def _create_streamtube_baked(
         line_data[idx, : line.shape[0]] = line
 
     use_rgb_mode = isinstance(colors, str) and colors.lower() == "rgb"
+    use_per_point_colors = False
 
     if use_rgb_mode:
         line_colors = np.zeros((n_lines, 3), dtype=np.float32)
+        point_color_data = None
+    elif isinstance(colors, (list, tuple)) and len(colors) > 0 and isinstance(
+        colors[0], np.ndarray
+    ) and colors[0].ndim == 2:
+        use_per_point_colors = True
+        color_arrays = [np.asarray(c, dtype=np.float32) for c in colors]
+        if len(color_arrays) != n_lines:
+            raise ValueError(
+                f"Per-point colors list must have {n_lines} arrays, "
+                f"got {len(color_arrays)}"
+            )
+        color_components = color_arrays[0].shape[1]
+        if color_components not in (3, 4):
+            raise ValueError(
+                "Per-point colors must have 3 (RGB) or 4 (RGBA) components, "
+                f"got {color_components}"
+            )
+        if color_components == 4:
+            color_arrays = [c[:, :3] for c in color_arrays]
+            color_components = 3
+        for idx, (ca, ll) in enumerate(zip(color_arrays, line_lengths)):
+            if ca.shape[0] != ll:
+                raise ValueError(
+                    f"Per-point color array {idx} has {ca.shape[0]} points but "
+                    f"line has {ll} points"
+                )
+        point_color_data = np.zeros(
+            (n_lines, max_line_length, color_components), dtype=np.float32
+        )
+        for idx, ca in enumerate(color_arrays):
+            point_color_data[idx, : ca.shape[0]] = ca
+        line_colors = np.zeros((n_lines, color_components), dtype=np.float32)
     else:
+        point_color_data = None
         if colors is None:
             colors = np.array([1.0, 1.0, 1.0], dtype=np.float32)
 
@@ -1262,7 +1296,24 @@ def _create_streamtube_baked(
     colors_data = np.zeros((total_vertices, color_components), dtype=np.float32)
     indices_data = np.zeros((total_triangles, 3), dtype=np.uint32)
 
-    if not use_rgb_mode:
+    if use_per_point_colors:
+        vertex_idx = 0
+        for line_idx in range(n_lines):
+            n_pts = int(line_lengths[line_idx])
+            for pt_idx in range(n_pts):
+                pt_color = point_color_data[line_idx, pt_idx]
+                start = vertex_idx + pt_idx * tube_sides
+                end = start + tube_sides
+                colors_data[start:end] = pt_color
+            if end_caps:
+                colors_data[vertex_idx + n_pts * tube_sides] = point_color_data[
+                    line_idx, 0
+                ]
+                colors_data[vertex_idx + n_pts * tube_sides + 1] = (
+                    point_color_data[line_idx, n_pts - 1]
+                )
+            vertex_idx += int(vertices_per_line[line_idx])
+    elif not use_rgb_mode:
         vertex_idx = 0
         for line_idx in range(n_lines):
             n_verts = int(vertices_per_line[line_idx])
@@ -1301,10 +1352,17 @@ def _create_streamtube_baked(
     mesh_obj.line_colors = line_colors
     mesh_obj.color_components = color_components
     mesh_obj.use_rgb_mode = use_rgb_mode
+    mesh_obj.use_per_point_colors = use_per_point_colors
     mesh_obj._needs_gpu_update = True
     mesh_obj.line_buffer = Buffer(line_data.reshape(-1))
     mesh_obj.length_buffer = Buffer(line_lengths)
     mesh_obj.color_buffer = Buffer(line_colors)
+    if use_per_point_colors:
+        mesh_obj.point_color_buffer = Buffer(
+            point_color_data.reshape(-1).astype(np.float32)
+        )
+    else:
+        mesh_obj.point_color_buffer = None
     mesh_obj.vertex_offset_buffer = Buffer(vertex_offsets)
     mesh_obj.triangle_offset_buffer = Buffer(triangle_offsets)
 
@@ -1339,9 +1397,12 @@ def streamtube(
         List of lines, where each line is a set of 3D points.
     opacity : float, optional
         Overall opacity of the actor, from 0.0 to 1.0.
-    colors : tuple, ndarray, or str, optional
+    colors : tuple, ndarray, list of ndarray, or str, optional
         - A single color tuple (e.g., (1,0,0)) for all lines.
         - An array of colors, one for each line (e.g., [[1,0,0], [0,1,0],...]).
+        - A list of per-point color arrays, one per line, where each array
+          has shape ``(N_i, 3)`` matching the number of points in that line.
+          GPU backend only.
         - ``"rgb"`` to color each vertex by its local tangent direction
           (absolute value mapped to RGB channels). GPU backend only.
     radius : float, optional
@@ -1392,6 +1453,15 @@ def streamtube(
 
     if isinstance(colors, str) and colors.lower() == "rgb" and backend != "gpu":
         raise ValueError("colors='rgb' requires backend='gpu'")
+
+    if (
+        isinstance(colors, (list, tuple))
+        and len(colors) > 0
+        and isinstance(colors[0], np.ndarray)
+        and colors[0].ndim == 2
+        and backend != "gpu"
+    ):
+        raise ValueError("Per-point colors (list of arrays) requires backend='gpu'")
 
     if backend == "gpu":
         return _create_streamtube_baked(
