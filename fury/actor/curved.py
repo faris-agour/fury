@@ -1246,7 +1246,7 @@ def _create_streamtube_baked(
             color_arrays = [c[:, :3] for c in color_arrays]
             color_components = 3
 
-        for idx, (ca, ll) in enumerate(zip(color_arrays, line_lengths)):
+        for idx, (ca, ll) in enumerate(zip(color_arrays, line_lengths, strict=False)):
             if ca.shape[0] != ll:
                 raise ValueError(
                     f"Per-point color array {idx} has {ca.shape[0]} points "
